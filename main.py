@@ -1,4 +1,3 @@
-
 import json
 import os
 import re
@@ -13,15 +12,12 @@ from video_builder import build_video
 from youtube_upload import upload_video
 
 
-# ============================================================
-# AUTOFACT AI - CONFIGURATION
-# ============================================================
-
 ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "work"))
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 HISTORY_PATH = ROOT / "used_topics.json"
+STATE_PATH = ROOT / "autofact_state.json"
 
 DEFAULT_MODEL = "gemini-3.8-flash"
 FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "").strip()
@@ -31,87 +27,99 @@ TARGET_SECONDS = int(os.getenv("VIDEO_SECONDS", "52"))
 VOICE_NAME = os.getenv("VOICE_NAME", "hi-IN-MadhurNeural")
 
 
-# ============================================================
-# ENVIRONMENT
-# ============================================================
+class QuotaPause(Exception):
+    pass
+
 
 def require_env(name):
     value = os.getenv(name)
 
     if not value:
         raise RuntimeError(
-            f"Missing required GitHub secret/environment variable: {name}"
+            f"Missing required environment variable: {name}"
         )
 
     return value
 
-
-# ============================================================
-# HISTORY MANAGEMENT
-# ============================================================
 
 def load_history():
     try:
         data = json.loads(
             HISTORY_PATH.read_text(encoding="utf-8")
         )
-
         return data.get("topics", [])
 
-    except (FileNotFoundError, json.JSONDecodeError):
+    except FileNotFoundError:
         return []
 
-    except Exception as exc:
-        print(f"History warning: {exc}", flush=True)
-        return []
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"History file is invalid: {exc}"
+        )
 
 
 def save_history(history):
-    data = {
-        "topics": history[-MAX_HISTORY:]
-    }
+    data = {"topics": history[-MAX_HISTORY:]}
 
     HISTORY_PATH.write_text(
-        json.dumps(
-            data,
-            ensure_ascii=False,
-            indent=2
-        ),
+        json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
 
-# ============================================================
-# JSON CLEANER
-# ============================================================
+def load_state():
+    if not STATE_PATH.exists():
+        return {}
+
+    try:
+        return json.loads(
+            STATE_PATH.read_text(encoding="utf-8")
+        )
+
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Progress state file is invalid: {exc}"
+        )
+
+
+def save_state(state):
+    temporary_path = STATE_PATH.with_suffix(".tmp")
+
+    temporary_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+    temporary_path.replace(STATE_PATH)
+
+
+def clear_state():
+    if STATE_PATH.exists():
+        STATE_PATH.unlink()
+
 
 def clean_json(text):
     if not text:
         raise RuntimeError("Gemini returned an empty response.")
 
     text = text.strip()
-
-    text = re.sub(
-        r"^```(?:json)?\s*",
-        "",
-        text
-    )
-
-    text = re.sub(
-        r"\s*```$",
-        "",
-        text
-    )
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
 
     return json.loads(text)
 
 
-# ============================================================
-# GEMINI MODEL SYSTEM
-# ============================================================
+def is_quota_error(error):
+    message = str(error).upper()
+
+    return (
+        "RESOURCE_EXHAUSTED" in message
+        or "429" in message
+        or "QUOTA EXCEEDED" in message
+    )
+
 
 def ask_gemini(client, model, prompt):
-
     models_to_try = [model]
 
     if FALLBACK_MODEL and FALLBACK_MODEL != model:
@@ -120,7 +128,6 @@ def ask_gemini(client, model, prompt):
     last_error = None
 
     for current_model in models_to_try:
-
         try:
             print(
                 f"Trying Gemini model: {current_model}",
@@ -151,47 +158,45 @@ def ask_gemini(client, model, prompt):
             return result
 
         except Exception as exc:
-
             last_error = exc
-            error_text = str(exc)
 
             print(
                 f"Model failed: {current_model}",
                 flush=True
             )
+            print(f"Reason: {exc}", flush=True)
 
-            print(
-                f"Reason: {error_text}",
-                flush=True
-            )
+            if is_quota_error(exc):
+                print(
+                    "Gemini quota/rate limit detected.",
+                    flush=True
+                )
+                continue
 
             temporary_errors = [
                 "503",
                 "502",
                 "500",
                 "504",
-                "429",
                 "UNAVAILABLE",
-                "RESOURCE_EXHAUSTED"
+                "INTERNAL"
             ]
 
             if not any(
-                code in error_text
+                code in str(exc).upper()
                 for code in temporary_errors
             ):
                 raise
 
+    if is_quota_error(last_error):
+        raise QuotaPause(str(last_error))
+
     raise RuntimeError(
-        f"All configured Gemini models failed. Last error: {last_error}"
+        f"All configured Gemini models failed: {last_error}"
     )
 
 
-# ============================================================
-# CONTENT PLANNER
-# ============================================================
-
 def create_plan(client, model, history, target_seconds):
-
     recent_topics = [
         item.get("topic", "")
         for item in history[-40:]
@@ -207,8 +212,7 @@ You are an intelligent YouTube Shorts production team:
 - Documentary storyteller
 - Visual planner
 
-Your job is to create ONE highly engaging, accurate,
-original YouTube Short.
+Create ONE highly engaging, accurate, original YouTube Short.
 
 TARGET:
 - Duration: approximately {target_seconds} seconds
@@ -218,20 +222,12 @@ TARGET:
 
 TOPIC CATEGORIES:
 Science, space, geography, history, archaeology,
-technology, nature, interesting discoveries,
-and non-graphic mysteries.
+technology, nature, discoveries and non-graphic mysteries.
 
 Avoid:
-- Graphic violence
-- Weapon instructions
-- Crime tutorials
-- Self-harm
-- Medical advice
-- Financial advice
-- Political persuasion
-- Unverified conspiracy claims
-- Celebrity gossip
-- Sensational misinformation
+Graphic violence, weapon instructions, crime tutorials,
+self-harm, medical advice, financial advice, political persuasion,
+unverified conspiracy claims and sensational misinformation.
 
 PREVIOUS TOPICS:
 {json.dumps(recent_topics, ensure_ascii=False)}
@@ -239,29 +235,26 @@ PREVIOUS TOPICS:
 Never repeat an already covered topic.
 
 STORYTELLING RULES:
-
 1. Start with a powerful curiosity-based hook.
-2. Do not waste time with greetings or introductions.
+2. No greetings or introductions.
 3. Every sentence should reveal something interesting.
 4. Use simple conversational Hinglish.
 5. Avoid robotic or textbook-style narration.
 6. Build curiosity progressively.
-7. Use short sentences that sound natural when spoken.
+7. Use short natural spoken sentences.
 8. End with a memorable takeaway.
 9. Never invent statistics, dates, quotations or events.
-10. Do not reveal that AI wrote the script.
+10. Internally review factual claims and remove doubtful details.
 
 VISUAL RULES:
-
-- Exactly 5 scenes for compatibility with the current editor.
-- Every scene must have a different visual subject or angle.
-- Use cinematic documentary-style visual descriptions.
-- Avoid generic images unrelated to the narration.
-- Images must not be presented as authentic historical evidence
-  unless their source actually establishes that.
+- Exactly 5 scenes.
+- Different visual subject or angle in every scene.
+- Cinematic documentary-style descriptions.
+- Visuals must relate to narration.
+- Do not present illustrative visuals as authentic historical evidence.
 - Captions must be short and readable.
 
-RETURN VALID JSON ONLY:
+Return valid JSON only:
 
 {{
   "topic": "Topic name",
@@ -283,31 +276,25 @@ RETURN VALID JSON ONLY:
 
 IMPORTANT:
 - Exactly five scenes.
-- Narration should be approximately 110-135 words.
-- Make the first 3 seconds especially interesting.
-- Do not put the entire narration into captions.
+- Narration approximately 110-135 words.
+- First 3 seconds must be interesting.
+- Do not put entire narration into captions.
 - Return valid JSON only.
 """
 
     return ask_gemini(client, model, prompt)
 
 
-# ============================================================
-# FACT CHECKING
-# ============================================================
-
 def refine_plan(client, model, plan, wiki_context, target_seconds):
-
     prompt = f"""
 You are AUTOFACT AI's strict fact-checking editor.
 
-Your task is to improve the supplied video plan.
+Improve the supplied video plan.
 
 SOURCE:
 Use ONLY the supplied Wikipedia context for specific factual claims.
 
 RULES:
-
 1. Remove unsupported claims.
 2. Do not invent facts.
 3. Preserve the original topic.
@@ -315,11 +302,11 @@ RULES:
 5. Improve awkward sentences.
 6. Keep the opening hook interesting.
 7. Keep the ending satisfying.
-8. Preserve the title and description meaning.
+8. Preserve title and description meaning.
 9. Keep exactly five scenes.
-10. Keep visual descriptions relevant to the narration.
+10. Keep visuals relevant to narration.
 11. Do not add unsupported statistics or dates.
-12. Do not make the narration unnecessarily slow or repetitive.
+12. Avoid repetitive narration.
 
 TARGET DURATION:
 Approximately {target_seconds} seconds.
@@ -336,12 +323,7 @@ Return the complete corrected JSON using exactly the same schema.
     return ask_gemini(client, model, prompt)
 
 
-# ============================================================
-# PLAN VALIDATION
-# ============================================================
-
 def validate_plan(plan):
-
     if not isinstance(plan, dict):
         raise RuntimeError("Invalid plan format.")
 
@@ -353,7 +335,6 @@ def validate_plan(plan):
     ]
 
     for field in required_fields:
-
         if not plan.get(field):
             raise RuntimeError(
                 f"Missing required plan field: {field}"
@@ -364,14 +345,13 @@ def validate_plan(plan):
 
     if len(plan["scenes"]) != 5:
         raise RuntimeError(
-            "Invalid scene count. Expected exactly 5."
+            "Expected exactly five scenes."
         )
 
     for index, scene in enumerate(plan["scenes"]):
-
         if not isinstance(scene, dict):
             raise RuntimeError(
-                f"Invalid scene at position {index + 1}"
+                f"Invalid scene {index + 1}"
             )
 
         if not scene.get("visual_query"):
@@ -388,29 +368,18 @@ def validate_plan(plan):
         plan["narration"].split()
     )
 
-    if narration_words < 60:
+    if narration_words < 60 or narration_words > 160:
         raise RuntimeError(
-            "Narration is too short."
-        )
-
-    if narration_words > 160:
-        raise RuntimeError(
-            "Narration is too long."
+            f"Invalid narration length: {narration_words} words"
         )
 
     print(
-        f"Plan validated: {narration_words} narration words, "
-        f"{len(plan['scenes'])} scenes.",
+        f"Plan validated: {narration_words} words, 5 scenes.",
         flush=True
     )
 
 
-# ============================================================
-# DESCRIPTION GENERATOR
-# ============================================================
-
 def create_description(plan, wiki, credits):
-
     source_line = next(
         (
             line
@@ -420,12 +389,11 @@ def create_description(plan, wiki, credits):
         ""
     )
 
-    description = (
-        plan.get("description_intro", "").strip()
-    )
+    description = plan.get(
+        "description_intro", ""
+    ).strip()
 
     if source_line:
-
         description += (
             "\n\nResearch context: "
             + source_line[4:].strip()
@@ -460,15 +428,24 @@ def create_description(plan, wiki, credits):
     return description[:4900]
 
 
-# ============================================================
-# MAIN AUTOMATION
-# ============================================================
-
 def main():
-
     print("=" * 50)
     print("AUTOFACT AI STARTING")
     print("=" * 50)
+
+    state = load_state()
+
+    retry_only = (
+        os.getenv("AUTOFACT_RETRY_ONLY", "false").lower()
+        == "true"
+    )
+
+    if retry_only and not state:
+        print(
+            "No pending task. Scheduled retry skipped.",
+            flush=True
+        )
+        return
 
     api_key = require_env("GEMINI_API_KEY")
 
@@ -477,10 +454,7 @@ def main():
         or DEFAULT_MODEL
     )
 
-    print(
-        f"Primary model: {model}",
-        flush=True
-    )
+    print(f"Primary model: {model}", flush=True)
 
     if FALLBACK_MODEL:
         print(
@@ -489,14 +463,13 @@ def main():
         )
 
     retry_options = types.HttpRetryOptions(
-        attempts=7,
-        initial_delay=2,
-        max_delay=60,
+        attempts=3,
+        initial_delay=3,
+        max_delay=30,
         exp_base=2,
         jitter=1,
         http_status_codes=[
             408,
-            429,
             500,
             502,
             503,
@@ -513,140 +486,219 @@ def main():
 
     history = load_history()
 
-    # STEP 1
-    print("\nSTEP 1: Creating video plan...", flush=True)
+    try:
+        if state.get("plan"):
+            plan = state["plan"]
+            print(
+                "Resuming saved video plan.",
+                flush=True
+            )
+        else:
+            print(
+                "\nSTEP 1: Creating video plan...",
+                flush=True
+            )
 
-    plan = create_plan(
-        client,
-        model,
-        history,
-        TARGET_SECONDS
-    )
+            try:
+                plan = create_plan(
+                    client,
+                    model,
+                    history,
+                    TARGET_SECONDS
+                )
+            except QuotaPause:
+                save_state({
+                    "stage": "need_plan"
+                })
+                raise
 
-    validate_plan(plan)
+            validate_plan(plan)
 
-    # STEP 2
-    print("\nSTEP 2: Researching topic...", flush=True)
+            state = {
+                "stage": "plan_created",
+                "plan": plan
+            }
+            save_state(state)
 
-    wiki = get_wikipedia_context(
-        plan.get(
-            "wikipedia_search",
-            plan["topic"]
+        validate_plan(plan)
+
+        if state.get("wiki"):
+            wiki = state["wiki"]
+            print(
+                "Resuming saved research context.",
+                flush=True
+            )
+        else:
+            print(
+                "\nSTEP 2: Researching topic...",
+                flush=True
+            )
+
+            wiki = get_wikipedia_context(
+                plan.get(
+                    "wikipedia_search",
+                    plan["topic"]
+                )
+            )
+
+            if not wiki:
+                save_state({
+                    "stage": "plan_created",
+                    "plan": plan
+                })
+                raise RuntimeError(
+                    "Wikipedia research failed. "
+                    "Saved plan for the next run."
+                )
+
+            state = {
+                "stage": "researched",
+                "plan": plan,
+                "wiki": wiki
+            }
+            save_state(state)
+
+        if state.get("stage") != "fact_checked":
+            print(
+                "\nSTEP 3: Fact-checking script...",
+                flush=True
+            )
+
+            try:
+                plan = refine_plan(
+                    client,
+                    model,
+                    plan,
+                    wiki,
+                    TARGET_SECONDS
+                )
+            except QuotaPause:
+                save_state({
+                    "stage": "researched",
+                    "plan": plan,
+                    "wiki": wiki
+                })
+                raise
+
+            validate_plan(plan)
+
+            state = {
+                "stage": "fact_checked",
+                "plan": plan,
+                "wiki": wiki
+            }
+            save_state(state)
+
+        else:
+            plan = state["plan"]
+            wiki = state["wiki"]
+
+        print(
+            "\nSTEP 4: Building video...",
+            flush=True
         )
-    )
 
-    if not wiki:
-        raise RuntimeError(
-            "Wikipedia research failed. "
-            "Stopping to avoid publishing unchecked content."
+        video_path, credits = build_video(
+            plan,
+            OUTPUT_DIR,
+            VOICE_NAME
         )
 
-    # STEP 3
-    print("\nSTEP 3: Fact-checking script...", flush=True)
+        if not Path(video_path).exists():
+            raise RuntimeError(
+                "Video builder did not create the expected video."
+            )
 
-    plan = refine_plan(
-        client,
-        model,
-        plan,
-        wiki,
-        TARGET_SECONDS
-    )
-
-    validate_plan(plan)
-
-    # STEP 4
-    print("\nSTEP 4: Building video...", flush=True)
-
-    video_path, credits = build_video(
-        plan,
-        OUTPUT_DIR,
-        VOICE_NAME
-    )
-
-    if not Path(video_path).exists():
-        raise RuntimeError(
-            "Video builder did not create the expected video file."
+        print(
+            f"Video created: {video_path}",
+            flush=True
         )
 
-    print(
-        f"Video created: {video_path}",
-        flush=True
-    )
-
-    # STEP 5
-    print("\nSTEP 5: Preparing metadata...", flush=True)
-
-    description = create_description(
-        plan,
-        wiki,
-        credits
-    )
-
-    title = str(
-        plan.get("title", plan["topic"])
-    )[:95]
-
-    tags = [
-        str(tag)[:30]
-        for tag in plan.get("tags", [])[:15]
-    ]
-
-    tags += [
-        "Shorts",
-        "Hinglish",
-        "Facts"
-    ]
-
-    tags = list(dict.fromkeys(tags))
-
-    # STEP 6
-    print("\nSTEP 6: Uploading to YouTube...", flush=True)
-
-    video_id = upload_video(
-        video_path=video_path,
-        title=title,
-        description=description,
-        tags=tags
-    )
-
-    if not video_id:
-        raise RuntimeError(
-            "YouTube upload returned no video ID."
+        print(
+            "\nSTEP 5: Preparing metadata...",
+            flush=True
         )
 
-    # STEP 7
-    print("\nSTEP 7: Saving topic history...", flush=True)
+        description = create_description(
+            plan,
+            wiki,
+            credits
+        )
 
-    history.append({
-        "topic": plan["topic"],
-        "slug": plan.get("topic_slug", ""),
-        "video_id": video_id
-    })
+        title = str(
+            plan.get("title", plan["topic"])
+        )[:95]
 
-    save_history(history)
+        tags = [
+            str(tag)[:30]
+            for tag in plan.get("tags", [])[:15]
+        ]
 
-    print("\n" + "=" * 50)
-    print("AUTOFACT AI COMPLETED SUCCESSFULLY")
-    print(f"Topic: {plan['topic']}")
-    print(f"Video: https://www.youtube.com/shorts/{video_id}")
-    print("=" * 50)
+        tags += [
+            "Shorts",
+            "Hinglish",
+            "Facts"
+        ]
 
+        tags = list(dict.fromkeys(tags))
 
-# ============================================================
-# ENTRY POINT
-# ============================================================
+        print(
+            "\nSTEP 6: Uploading to YouTube...",
+            flush=True
+        )
+
+        video_id = upload_video(
+            video_path=video_path,
+            title=title,
+            description=description,
+            tags=tags
+        )
+
+        if not video_id:
+            raise RuntimeError(
+                "YouTube upload returned no video ID."
+            )
+
+        print(
+            "\nSTEP 7: Saving topic history...",
+            flush=True
+        )
+
+        history.append({
+            "topic": plan["topic"],
+            "slug": plan.get("topic_slug", ""),
+            "video_id": video_id
+        })
+
+        save_history(history)
+        clear_state()
+
+        print("\n" + "=" * 50)
+        print("AUTOFACT AI COMPLETED SUCCESSFULLY")
+        print(f"Topic: {plan['topic']}")
+        print(
+            f"Video: https://www.youtube.com/shorts/{video_id}"
+        )
+        print("=" * 50)
+
+    except QuotaPause as exc:
+        print("\n" + "=" * 50)
+        print("GEMINI QUOTA LIMIT REACHED")
+        print("Progress saved successfully.")
+        print("AUTOFACT AI PAUSED.")
+        print("GitHub Actions will retry automatically.")
+        print(str(exc))
+        print("=" * 50)
+
 
 if __name__ == "__main__":
-
     try:
         main()
 
     except Exception as exc:
-
         print(
             f"\nAUTOFACT AI FAILED: {exc}",
             file=sys.stderr,
             flush=True
         )
-
         raise
