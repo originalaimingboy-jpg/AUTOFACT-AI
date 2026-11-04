@@ -1,9 +1,9 @@
-name: AUTOFACT AI — Weekly Shorts
+name: AUTOFACT AI - Weekly Shorts
 
 on:
   schedule:
-    # Sunday 09:00 India time (03:30 UTC). GitHub schedules may be delayed.
     - cron: "30 3 * * 0"
+    - cron: "0 */3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -17,9 +17,12 @@ jobs:
   create-and-upload:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,10 +40,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Generate and upload one Short
+      - name: Generate or resume Short
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GEMINI_FALLBACK_MODEL: ${{ vars.GEMINI_FALLBACK_MODEL }}
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
@@ -48,20 +52,29 @@ jobs:
           VIDEO_SECONDS: "52"
           VOICE_NAME: hi-IN-MadhurNeural
           OUTPUT_DIR: work
+          AUTOFACT_RETRY_ONLY: ${{ github.event.schedule == '0 */3 * * *' }}
         run: python main.py
 
-      - name: Commit topic history
-        if: success()
+      - name: Save progress and topic history
+        if: always()
         run: |
           git config user.name "autofact-ai[bot]"
           git config user.email "autofact-ai[bot]@users.noreply.github.com"
-          git add used_topics.json
+
+          git add -A -- used_topics.json
+
+          if [ -f autofact_state.json ]; then
+            git add autofact_state.json
+          else
+            git rm --cached --ignore-unmatch autofact_state.json
+          fi
+
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update AUTOFACT topic history"
+            git commit -m "chore: save AUTOFACT progress"
             git push
           fi
 
-      - name: Upload generated MP4 as a backup artifact
+      - name: Upload generated MP4 as backup
         if: always()
         uses: actions/upload-artifact@v4
         with:
