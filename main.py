@@ -43,22 +43,60 @@ def clean_json(text):
     return json.loads(text)
 
 
-def ask_gemini(client, model, prompt):
-    print(f"Requesting Gemini model: {model}", flush=True)
 
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0.75,
-            response_mime_type="application/json",
-        ),
+def ask_gemini(client, model, prompt):
+    fallback_models = [
+        model,
+        "gemini-3.5-flash",
+    ]
+
+    last_error = None
+
+    for current_model in fallback_models:
+        try:
+            print(
+                f"Trying Gemini model: {current_model}",
+                flush=True
+            )
+
+            response = client.models.generate_content(
+                model=current_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.75,
+                    response_mime_type="application/json",
+                ),
+            )
+
+            if not response.text:
+                raise RuntimeError("Gemini returned an empty response.")
+
+            print(
+                f"Gemini success: {current_model}",
+                flush=True
+            )
+
+            return clean_json(response.text)
+
+        except Exception as exc:
+            last_error = exc
+            error_text = str(exc)
+
+            print(
+                f"Model {current_model} failed: {error_text}",
+                flush=True
+            )
+
+            # Try fallback only for temporary service errors.
+            if not any(code in error_text for code in [
+                "503", "502", "500", "504", "429", "UNAVAILABLE"
+            ]):
+                raise
+
+    raise RuntimeError(
+        f"All Gemini models failed. Last error: {last_error}"
     )
 
-    if not response.text:
-        raise RuntimeError("Gemini returned an empty response.")
-
-    return clean_json(response.text)
 
 
 def create_plan(client, model, history, target_seconds):
