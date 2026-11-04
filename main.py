@@ -126,6 +126,7 @@ def ask_gemini(client, model, prompt):
         models_to_try.append(FALLBACK_MODEL)
 
     last_error = None
+    quota_seen = False
 
     for current_model in models_to_try:
         try:
@@ -167,10 +168,7 @@ def ask_gemini(client, model, prompt):
             print(f"Reason: {exc}", flush=True)
 
             if is_quota_error(exc):
-                print(
-                    "Gemini quota/rate limit detected.",
-                    flush=True
-                )
+                quota_seen = True
                 continue
 
             temporary_errors = [
@@ -188,7 +186,7 @@ def ask_gemini(client, model, prompt):
             ):
                 raise
 
-    if is_quota_error(last_error):
+    if quota_seen:
         raise QuotaPause(str(last_error))
 
     raise RuntimeError(
