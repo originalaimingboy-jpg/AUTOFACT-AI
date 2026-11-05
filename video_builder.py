@@ -1,518 +1,488 @@
-
-import asyncio
 import os
+import re
+import math
+import random
 import subprocess
-import textwrap
-from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
 import edge_tts
 
-from commons import find_commons_image, find_commons_video
+from PIL import Image, ImageDraw, ImageFont
+
+from commons import (
+    find_commons_image,
+    find_commons_video
+)
 
 
-WIDTH, HEIGHT, FPS = 1080, 1920, 25
-FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-CAPTION_SIZE = 43
-TARGET_SECONDS = 52.0
-MIN_VOICE_SECONDS = 40.0
-MAX_VOICE_SECONDS = 58.0
+WIDTH = 1080
+HEIGHT = 1920
+FPS = 25
+
+MIN_SECONDS = 30
+MAX_SECONDS = 40
+DEFAULT_SECONDS = 35
+
+VOICE_NAME = "hi-IN-MadhurNeural"
+
+FONT_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+]
 
 
-def run(cmd):
+def run_command(command):
     result = subprocess.run(
-        cmd,
-        check=True,
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True
     )
-    return result
 
-
-def get_audio_duration(audio):
-    probe = subprocess.check_output([
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        str(audio)
-    ], text=True).strip()
-
-    return float(probe)
-
-
-def load_font(size):
-    try:
-        return ImageFont.truetype(FONT, size)
-    except Exception:
-        return ImageFont.load_default()
-
-
-def make_fallback(path, caption, index):
-    img = Image.new(
-        "RGB",
-        (WIDTH, HEIGHT),
-        (13 + index * 3, 12, 30 + index * 5)
-    )
-
-    draw = ImageDraw.Draw(img)
-
-    for y in range(HEIGHT):
-        shade = int(20 + 35 * y / HEIGHT)
-        draw.line(
-            (0, y, WIDTH, y),
-            fill=(shade // 2, shade // 3, shade)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "FFmpeg error:\n" + result.stderr[-3000:]
         )
 
-    font = load_font(48)
 
-    lines = textwrap.wrap(
-        str(caption)[:90],
-        width=25
-    )[:3]
+def get_font(size):
+    for path in FONT_PATHS:
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size)
 
-    line_height = 65
-    total_height = len(lines) * line_height
-    start_y = (HEIGHT - total_height) // 2
-
-    for i, line in enumerate(lines):
-        box = draw.textbbox((0, 0), line, font=font)
-        text_width = box[2] - box[0]
-
-        draw.text(
-            (
-                (WIDTH - text_width) / 2,
-                start_y + i * line_height
-            ),
-            line,
-            font=font,
-            fill="white"
-        )
-
-    img.save(path, quality=92)
+    return ImageFont.load_default()
 
 
-def fit_image(source, destination):
-    with Image.open(source) as im:
-        im = im.convert("RGB")
+def safe_name(text):
+    text = re.sub(r"[^a-zA-Z0-9_-]", "_", text)
+    return text[:45]
 
-        target_ratio = WIDTH / HEIGHT
-        ratio = im.width / im.height
 
-        if ratio > target_ratio:
-            new_w = int(im.height * target_ratio)
-            left = (im.width - new_w) // 2
+def wrap_text(text, max_chars=23):
+    words = str(text).split()
+    lines = []
+    current = ""
 
-            im = im.crop((
-                left,
-                0,
-                left + new_w,
-                im.height
-            ))
+    for word in words:
+        test = (current + " " + word).strip()
 
+        if len(test) > max_chars and current:
+            lines.append(current)
+            current = word
         else:
-            new_h = int(im.width / target_ratio)
-            top = (im.height - new_h) // 2
+            current = test
 
-            im = im.crop((
-                0,
-                top,
-                im.width,
-                top + new_h
-            ))
+    if current:
+        lines.append(current)
 
-        im = im.resize(
-            (WIDTH, HEIGHT),
-            Image.Resampling.LANCZOS
-        )
-
-        im.save(destination, quality=94)
+    return lines[:3]
 
 
-def create_caption_image(caption, path):
-    overlay = Image.new(
+def make_caption(text, output_path):
+    image = Image.new(
         "RGBA",
-        (WIDTH, HEIGHT),
+        (WIDTH, 350),
         (0, 0, 0, 0)
     )
 
-    draw = ImageDraw.Draw(overlay)
-    font = load_font(CAPTION_SIZE)
+    draw = ImageDraw.Draw(image)
+    font = get_font(66)
 
-    lines = textwrap.wrap(
-        str(caption).strip()[:100],
-        width=27
-    )[:2]
-
-    if not lines:
-        lines = [""]
-
-    line_height = 62
-    padding_x = 35
-    padding_y = 22
-
-    dimensions = [
-        draw.textbbox((0, 0), line, font=font)
-        for line in lines
-    ]
-
-    max_width = max(
-        box[2] - box[0]
-        for box in dimensions
-    )
+    lines = wrap_text(text)
+    line_height = 82
 
     total_height = len(lines) * line_height
+    y = (350 - total_height) // 2
 
-    box_width = max_width + padding_x * 2
-    box_height = total_height + padding_y * 2
+    for line in lines:
+        bbox = draw.textbbox(
+            (0, 0),
+            line,
+            font=font,
+            stroke_width=3
+        )
 
-    box_x = (WIDTH - box_width) // 2
-    box_y = int(HEIGHT * 0.72)
-
-    draw.rounded_rectangle(
-        (
-            box_x,
-            box_y,
-            box_x + box_width,
-            box_y + box_height
-        ),
-        radius=22,
-        fill=(0, 0, 0, 175)
-    )
-
-    for index, line in enumerate(lines):
-        bbox = draw.textbbox((0, 0), line, font=font)
         text_width = bbox[2] - bbox[0]
-
         x = (WIDTH - text_width) // 2
-        y = box_y + padding_y + index * line_height
 
         draw.text(
             (x, y),
             line,
             font=font,
-            fill=(255, 255, 255, 255),
-            stroke_width=1,
-            stroke_fill=(0, 0, 0, 180)
+            fill="white",
+            stroke_width=4,
+            stroke_fill="black"
         )
 
-    overlay.save(path)
+        y += line_height
+
+    image.save(output_path)
 
 
-async def make_voice(text, path, voice, rate):
+def make_fallback_background(output_path, seed):
+    random.seed(seed)
+
+    image = Image.new(
+        "RGB",
+        (WIDTH, HEIGHT),
+        (12, 17, 30)
+    )
+
+    draw = ImageDraw.Draw(image)
+
+    for i in range(30):
+        x = random.randint(0, WIDTH)
+        y = random.randint(0, HEIGHT)
+        radius = random.randint(20, 140)
+
+        draw.ellipse(
+            (
+                x - radius,
+                y - radius,
+                x + radius,
+                y + radius
+            ),
+            fill=(
+                random.randint(15, 45),
+                random.randint(25, 65),
+                random.randint(50, 110)
+            )
+        )
+
+    image.save(output_path)
+
+
+async def create_voice(text, output_path, target_seconds):
     communicate = edge_tts.Communicate(
         text=text,
-        voice=voice,
-        rate=f"{rate:+d}%",
+        voice=VOICE_NAME,
+        rate="+0%",
         volume="+0%"
     )
 
-    await communicate.save(str(path))
+    await communicate.save(output_path)
+
+    return output_path
 
 
-def create_fitted_voice(narration, audio, voice):
-    rate = 8
-    duration = 0
-
-    for attempt in range(5):
-        if os.path.exists(audio):
-            os.remove(audio)
-
-        asyncio.run(
-            make_voice(
-                narration,
-                audio,
-                voice,
-                rate
-            )
-        )
-
-        duration = get_audio_duration(audio)
-
-        print(
-            f"Voice attempt {attempt + 1}: "
-            f"{duration:.1f}s at rate {rate:+d}%",
-            flush=True
-        )
-
-        if MIN_VOICE_SECONDS <= duration <= MAX_VOICE_SECONDS:
-            return duration
-
-        suggested_rate = round(
-            (1 + rate / 100)
-            * (duration / TARGET_SECONDS)
-            * 100 - 100
-        )
-
-        rate = max(-5, min(35, suggested_rate))
-
-    if MIN_VOICE_SECONDS <= duration <= 60:
-        return duration
-
-    raise RuntimeError(
-        f"Voice duration could not be fitted: {duration:.1f}s"
+def get_audio_duration(path):
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            path
+        ],
+        capture_output=True,
+        text=True
     )
 
-
-def build_caption_overlay(caption, index, work):
-    caption_path = work / f"caption_overlay_{index}.png"
-
-    create_caption_image(
-        caption,
-        caption_path
-    )
-
-    return caption_path
+    return float(result.stdout.strip())
 
 
-def build_image_scene(still, caption_path, clip, duration, index):
+def fit_audio(input_path, output_path, target_seconds):
+    duration = get_audio_duration(input_path)
+
+    if duration <= 0:
+        raise RuntimeError("Audio duration invalid")
+
+    # Keep voice speed within a reasonable range.
+    speed = duration / target_seconds
+    speed = max(0.88, min(1.15, speed))
+
+    run_command([
+        "ffmpeg",
+        "-y",
+        "-i", input_path,
+        "-filter:a", f"atempo={speed:.4f}",
+        "-c:a", "libmp3lame",
+        "-q:a", "3",
+        output_path
+    ])
+
+    return get_audio_duration(output_path)
+
+
+def create_image_scene(image_path, caption_path, output_path, duration):
     frames = max(1, int(duration * FPS))
 
-    if index % 2 == 0:
-        zoom = "min(zoom+0.0008,1.13)"
-    else:
-        zoom = "max(zoom-0.0005,1.0)"
+    zoom_direction = random.choice(["in", "out"])
 
-    vf = (
-        f"zoompan=z='{zoom}':"
-        f"d={frames}:"
-        f"x='iw/2-(iw/zoom/2)':"
-        f"y='ih/2-(ih/zoom/2)':"
-        f"s={WIDTH}x{HEIGHT}:"
-        f"fps={FPS},"
-        "eq=saturation=1.12:contrast=1.04:brightness=0.01,"
-        "format=yuv420p"
+    if zoom_direction == "in":
+        zoom = (
+            "z='min(zoom+0.0008,1.12)':"
+            "x='iw/2-(iw/zoom/2)':"
+            "y='ih/2-(ih/zoom/2)'"
+        )
+    else:
+        zoom = (
+            "z='if(eq(on,1),1.12,max(zoom-0.0008,1.0))':"
+            "x='iw/2-(iw/zoom/2)':"
+            "y='ih/2-(ih/zoom/2)'"
+        )
+
+    filter_complex = (
+        f"scale=1200:2134:force_original_aspect_ratio=increase,"
+        f"crop=1200:2134,"
+        f"zoompan={zoom}:d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS},"
+        f"setsar=1,"
+        f"eq=contrast=1.08:saturation=1.12,"
+        f"format=yuv420p"
     )
 
-    run([
+    run_command([
         "ffmpeg",
         "-y",
         "-loop", "1",
-        "-i", str(still),
-        "-i", str(caption_path),
+        "-i", image_path,
+        "-loop", "1",
+        "-i", caption_path,
         "-filter_complex",
-        f"[0:v]{vf}[base];"
-        "[base][1:v]overlay=0:0:shortest=1[out]",
+        (
+            f"[0:v]{filter_complex}[base];"
+            f"[base][1:v]overlay=0:1200:shortest=1[out]"
+        ),
         "-map", "[out]",
-        "-t", f"{duration:.3f}",
+        "-t", str(duration),
         "-r", str(FPS),
         "-an",
         "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-crf", "24",
+        "-preset", "veryfast",
         "-pix_fmt", "yuv420p",
-        str(clip)
+        output_path
     ])
 
 
-def build_video_scene(video, caption_path, clip, duration):
-    vf = (
-        f"scale={WIDTH}:{HEIGHT}:"
-        "force_original_aspect_ratio=increase,"
-        f"crop={WIDTH}:{HEIGHT},"
-        f"fps={FPS},"
-        "setsar=1,"
-        "eq=saturation=1.12:contrast=1.04:brightness=0.01,"
-        "format=yuv420p"
-    )
-
-    run([
+def create_video_scene(video_path, caption_path, output_path, duration):
+    run_command([
         "ffmpeg",
         "-y",
         "-stream_loop", "-1",
-        "-i", str(video),
-        "-i", str(caption_path),
+        "-i", video_path,
+        "-loop", "1",
+        "-i", caption_path,
         "-filter_complex",
-        f"[0:v]{vf}[base];"
-        "[base][1:v]overlay=0:0:shortest=1[out]",
+        (
+            f"[0:v]scale=1200:2134:force_original_aspect_ratio=increase,"
+            f"crop=1200:2134,"
+            f"fps={FPS},"
+            f"eq=contrast=1.08:saturation=1.12,"
+            f"setsar=1[base];"
+            f"[base][1:v]overlay=0:1200:shortest=1[out]"
+        ),
         "-map", "[out]",
-        "-t", f"{duration:.3f}",
+        "-t", str(duration),
         "-r", str(FPS),
         "-an",
         "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-crf", "24",
+        "-preset", "veryfast",
         "-pix_fmt", "yuv420p",
-        str(clip)
+        output_path
     ])
 
 
-def build_video(plan, output_dir, voice):
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+def build_video(plan, output_dir, voice_name=VOICE_NAME, target_seconds=DEFAULT_SECONDS):
+    os.makedirs(output_dir, exist_ok=True)
 
-    work = output_dir / "build"
-    work.mkdir(parents=True, exist_ok=True)
-
-    narration = plan["narration"].strip()
-    audio = output_dir / "narration.mp3"
-
-    audio_seconds = create_fitted_voice(
-        narration,
-        audio,
-        voice
+    target_seconds = max(
+        MIN_SECONDS,
+        min(MAX_SECONDS, int(target_seconds))
     )
 
-    total_seconds = audio_seconds
-    scenes = plan["scenes"]
+    global VOICE_NAME
+    VOICE_NAME = voice_name
 
-    if len(scenes) != 5:
-        raise RuntimeError(
-            "Video builder requires exactly 5 scenes."
+    scenes = plan.get("scenes", [])
+
+    if not scenes:
+        raise ValueError("Plan has no scenes")
+
+    narration = plan.get("narration", "").strip()
+
+    if not narration:
+        raise ValueError("Narration is empty")
+
+    # Split narration into scene segments.
+    scene_count = min(7, max(5, len(scenes)))
+    scenes = scenes[:scene_count]
+
+    if len(scenes) < 5:
+        raise ValueError("At least 5 scenes required")
+
+    audio_raw = os.path.join(output_dir, "voice_raw.mp3")
+    audio_final = os.path.join(output_dir, "voice.mp3")
+
+    import asyncio
+
+    asyncio.run(
+        create_voice(
+            narration,
+            audio_raw,
+            target_seconds
         )
+    )
 
-    scene_seconds = total_seconds / len(scenes)
+    actual_audio_duration = fit_audio(
+        audio_raw,
+        audio_final,
+        target_seconds
+    )
 
-    clips = []
+    scene_duration = actual_audio_duration / len(scenes)
+
     credits = []
-    used_video_titles = set()
-    used_image_titles = set()
+    clip_paths = []
 
     for index, scene in enumerate(scenes):
-        print(
-            f"Building scene {index + 1}/{len(scenes)}...",
-            flush=True
+        print(f"\nBuilding scene {index + 1}/{len(scenes)}")
+
+        visual_query = (
+            scene.get("visual_query")
+            or scene.get("search_query")
+            or scene.get("caption")
+            or scene.get("title")
+            or "science technology"
         )
 
-        query = scene.get(
-            "visual_query",
-            plan["topic"]
+        caption = (
+            scene.get("caption")
+            or scene.get("title")
+            or ""
         )
 
-        caption = scene.get(
-            "caption",
-            plan["topic"]
+        base_name = f"scene_{index + 1}"
+        image_path = os.path.join(
+            output_dir,
+            base_name + ".jpg"
+        )
+        video_path = os.path.join(
+            output_dir,
+            base_name + ".mp4"
+        )
+        caption_path = os.path.join(
+            output_dir,
+            base_name + "_caption.png"
+        )
+        clip_path = os.path.join(
+            output_dir,
+            base_name + "_clip.mp4"
         )
 
-        clip = work / f"clip_{index}.mp4"
-        caption_path = build_caption_overlay(
-            caption,
-            index,
-            work
+        make_caption(caption, caption_path)
+
+        selected_path = None
+        selected_type = None
+        credit = None
+
+        # Try a video first.
+        selected_path, credit = find_commons_video(
+            visual_query,
+            video_path
         )
 
-        video_path = work / f"raw_video_{index}.webm"
-
-        found_video, video_credit = find_commons_video(
-            query,
-            video_path,
-            exclude_titles=used_video_titles
-        )
-
-        if found_video and Path(found_video).exists():
-            print(
-                f"Using actual video footage for scene {index + 1}",
-                flush=True
+        if selected_path:
+            selected_type = "video"
+        else:
+            # If video unavailable, use a photo with motion.
+            selected_path, credit = find_commons_image(
+                visual_query,
+                image_path
             )
 
-            build_video_scene(
-                found_video,
+            if selected_path:
+                selected_type = "image"
+
+        if selected_type == "video":
+            create_video_scene(
+                selected_path,
                 caption_path,
-                clip,
-                scene_seconds
+                clip_path,
+                scene_duration
             )
 
-            if video_credit:
-                credits.append(video_credit)
-
-                title = video_credit.split(" — ")[0]
-                used_video_titles.add(title)
+        elif selected_type == "image":
+            create_image_scene(
+                selected_path,
+                caption_path,
+                clip_path,
+                scene_duration
+            )
 
         else:
-            print(
-                f"No video footage found for scene {index + 1}. "
-                "Searching for an image...",
-                flush=True
+            print("No Commons asset found; generating fallback visual.")
+
+            fallback_path = os.path.join(
+                output_dir,
+                base_name + "_fallback.jpg"
             )
 
-            raw_image = work / f"raw_image_{index}.jpg"
-            still = work / f"scene_{index}.jpg"
-
-            found_image, image_credit = find_commons_image(
-                query,
-                raw_image,
-                exclude_titles=used_image_titles
+            make_fallback_background(
+                fallback_path,
+                index + 100
             )
 
-            if found_image and Path(found_image).exists():
-                fit_image(
-                    found_image,
-                    still
-                )
-
-                if image_credit:
-                    credits.append(image_credit)
-
-                    title = image_credit.split(" — ")[0]
-                    used_image_titles.add(title)
-
-            else:
-                make_fallback(
-                    still,
-                    caption,
-                    index
-                )
-
-                credits.append(
-                    f"Scene {index + 1}: generated fallback illustration."
-                )
-
-            build_image_scene(
-                still,
+            create_image_scene(
+                fallback_path,
                 caption_path,
-                clip,
-                scene_seconds,
-                index
+                clip_path,
+                scene_duration
             )
 
-        clips.append(clip)
+        if credit:
+            credits.append(credit)
 
-    concat_file = work / "concat.txt"
+        clip_paths.append(clip_path)
 
-    concat_file.write_text(
-        "\n".join(
-            f"file '{clip.resolve()}'"
-            for clip in clips
-        ),
-        encoding="utf-8"
+    # Concatenate all clips.
+    concat_file = os.path.join(
+        output_dir,
+        "concat.txt"
     )
 
-    joined = work / "joined.mp4"
+    with open(concat_file, "w", encoding="utf-8") as file:
+        for path in clip_paths:
+            safe_path = os.path.abspath(path).replace("'", "'\\''")
+            file.write(f"file '{safe_path}'\n")
 
-    run([
+    silent_video = os.path.join(
+        output_dir,
+        "silent_video.mp4"
+    )
+
+    run_command([
         "ffmpeg",
         "-y",
         "-f", "concat",
         "-safe", "0",
-        "-i", str(concat_file),
-        "-c", "copy",
-        str(joined)
+        "-i", concat_file,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-pix_fmt", "yuv420p",
+        "-r", str(FPS),
+        silent_video
     ])
 
-    final_path = output_dir / "autofact_short.mp4"
+    final_path = os.path.join(
+        output_dir,
+        "autofact_short.mp4"
+    )
 
-    run([
+    run_command([
         "ffmpeg",
         "-y",
-        "-i", str(joined),
-        "-i", str(audio),
+        "-i", silent_video,
+        "-i", audio_final,
         "-map", "0:v:0",
         "-map", "1:a:0",
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-crf", "24",
+        "-c:v", "copy",
         "-c:a", "aac",
-        "-b:a", "128k",
-        "-t", f"{total_seconds:.2f}",
-        "-pix_fmt", "yuv420p",
+        "-b:a", "160k",
+        "-t", str(actual_audio_duration),
         "-movflags", "+faststart",
-        str(final_path)
+        final_path
     ])
 
-    print(
-        f"Final video ready: {final_path}",
-        flush=True
-    )
+    print("\nVideo created:", final_path)
+    print("Duration:", round(get_audio_duration(final_path), 2), "seconds")
 
     return final_path, credits
