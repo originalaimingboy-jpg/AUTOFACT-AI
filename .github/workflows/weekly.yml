@@ -49,7 +49,7 @@ jobs:
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           VIDEO_LANGUAGE: Hinglish
-          VIDEO_SECONDS: "52"
+          VIDEO_SECONDS: "35"
           VOICE_NAME: hi-IN-MadhurNeural
           OUTPUT_DIR: work
           AUTOFACT_RETRY_ONLY: ${{ github.event.schedule == '0 */3 * * *' }}
