@@ -1,3 +1,4 @@
+
 import json
 import os
 import re
@@ -20,22 +21,18 @@ from youtube_upload import upload_video
 
 ROOT = Path(__file__).resolve().parent
 
-OUTPUT_DIR = Path(
-    os.getenv("OUTPUT_DIR", "work")
-)
+OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "work"))
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 HISTORY_PATH = ROOT / "used_topics.json"
 STATE_PATH = ROOT / "autofact_state.json"
 
-# SAME MODEL FOR ALL API KEYS
 DEFAULT_MODEL = "gemini-3.8-flash"
 
 MAX_HISTORY = 200
+MAX_ATTEMPTS_PER_KEY = 3
 
-TARGET_SECONDS = int(
-    os.getenv("VIDEO_SECONDS", "35")
-)
+TARGET_SECONDS = int(os.getenv("VIDEO_SECONDS", "35"))
 TARGET_SECONDS = max(30, min(40, TARGET_SECONDS))
 
 VOICE_NAME = os.getenv(
@@ -44,7 +41,15 @@ VOICE_NAME = os.getenv(
 )
 
 
+# ============================================================
+# CUSTOM EXCEPTIONS
+# ============================================================
+
 class QuotaPause(Exception):
+    pass
+
+
+class GeminiTemporaryPause(Exception):
     pass
 
 
@@ -53,6 +58,7 @@ class QuotaPause(Exception):
 # ============================================================
 
 def require_env(name):
+
     value = os.getenv(name)
 
     if not value:
@@ -78,7 +84,9 @@ def create_gemini_clients():
     api_keys = [primary_key]
 
     if backup_keys_text:
+
         for key in backup_keys_text.split(","):
+
             key = key.strip()
 
             if key and key not in api_keys:
@@ -89,6 +97,7 @@ def create_gemini_clients():
     for index, api_key in enumerate(api_keys):
 
         try:
+
             client = genai.Client(
                 api_key=api_key,
                 http_options=types.HttpOptions(
@@ -105,12 +114,15 @@ def create_gemini_clients():
             })
 
         except Exception as exc:
+
             print(
-                f"Could not initialize API key {index + 1}: {exc}",
+                f"Could not initialize API key "
+                f"{index + 1}: {exc}",
                 flush=True
             )
 
     if not clients:
+
         raise RuntimeError(
             "No Gemini API clients could be initialized."
         )
@@ -130,6 +142,7 @@ def create_gemini_clients():
 def load_history():
 
     try:
+
         data = json.loads(
             HISTORY_PATH.read_text(encoding="utf-8")
         )
@@ -137,9 +150,11 @@ def load_history():
         return data.get("topics", [])
 
     except FileNotFoundError:
+
         return []
 
     except json.JSONDecodeError as exc:
+
         raise RuntimeError(
             f"History file is invalid: {exc}"
         )
@@ -175,11 +190,13 @@ def load_state():
         return {}
 
     try:
+
         return json.loads(
             STATE_PATH.read_text(encoding="utf-8")
         )
 
     except json.JSONDecodeError as exc:
+
         raise RuntimeError(
             f"Progress state file is invalid: {exc}"
         )
@@ -214,6 +231,7 @@ def clear_state():
 def clean_json(text):
 
     if not text:
+
         raise RuntimeError(
             "Gemini returned an empty response."
         )
@@ -283,12 +301,13 @@ def is_temporary_error(error):
 
 
 # ============================================================
-# GEMINI REQUEST SYSTEM
+# GEMINI REQUEST SYSTEM WITH FAILOVER
 # ============================================================
 
 def ask_gemini(clients, model, prompt):
 
     last_error = None
+    last_error_type = None
 
     for key_data in clients:
 
@@ -300,13 +319,14 @@ def ask_gemini(clients, model, prompt):
             flush=True
         )
 
-        # Retry temporary errors on the SAME key.
-        for attempt in range(3):
+        for attempt in range(MAX_ATTEMPTS_PER_KEY):
 
             try:
 
                 print(
-                    f"Trying model: {model} | Attempt {attempt + 1}/3",
+                    f"Trying model: {model} | "
+                    f"Attempt {attempt + 1}/"
+                    f"{MAX_ATTEMPTS_PER_KEY}",
                     flush=True
                 )
 
@@ -320,6 +340,7 @@ def ask_gemini(clients, model, prompt):
                 )
 
                 if not response.text:
+
                     raise RuntimeError(
                         "Gemini returned an empty response."
                     )
@@ -327,7 +348,8 @@ def ask_gemini(clients, model, prompt):
                 result = clean_json(response.text)
 
                 print(
-                    f"Gemini success: {model}",
+                    f"Gemini success: {model} "
+                    f"(API key {key_number})",
                     flush=True
                 )
 
@@ -342,27 +364,32 @@ def ask_gemini(clients, model, prompt):
                     flush=True
                 )
 
-                # Do not rotate keys to bypass quota.
+                # QUOTA: Do not rotate keys.
                 if is_quota_error(exc):
+
                     raise QuotaPause(
                         f"Gemini quota limit reached: {exc}"
                     )
 
-                # Try another configured key only for
-                # authentication / key configuration errors.
+                # AUTHENTICATION: Try next configured key.
                 if is_auth_error(exc):
 
+                    last_error_type = "auth"
+
                     print(
-                        f"API key {key_number} authentication failed.",
+                        f"API key {key_number} authentication "
+                        "failed. Moving to next key.",
                         flush=True
                     )
 
                     break
 
-                # Retry temporary server errors.
+                # TEMPORARY SERVER ERROR: Retry, then fail over.
                 if is_temporary_error(exc):
 
-                    if attempt < 2:
+                    last_error_type = "temporary"
+
+                    if attempt < MAX_ATTEMPTS_PER_KEY - 1:
 
                         delay = (
                             min(30, 5 * (2 ** attempt))
@@ -370,22 +397,36 @@ def ask_gemini(clients, model, prompt):
                         )
 
                         print(
-                            f"Temporary error. Retrying in {delay:.1f} seconds.",
+                            f"Temporary error. Retrying in "
+                            f"{delay:.1f} seconds.",
                             flush=True
                         )
 
                         time.sleep(delay)
                         continue
 
-                    raise RuntimeError(
-                        f"Gemini server remained unavailable after retries: {exc}"
+                    print(
+                        f"API key {key_number} exhausted its "
+                        "retries. Moving to next configured key.",
+                        flush=True
                     )
 
-                # Unknown errors should not silently rotate keys.
+                    break
+
+                # UNKNOWN ERROR: Stop rather than silently rotating.
                 raise
 
+    # All configured keys have been checked.
+    if last_error_type == "temporary":
+
+        raise GeminiTemporaryPause(
+            "All configured Gemini API keys encountered "
+            "temporary server errors. "
+            f"Last error: {last_error}"
+        )
+
     raise RuntimeError(
-        f"All configured Gemini API keys failed authentication. "
+        "All configured Gemini API keys failed. "
         f"Last error: {last_error}"
     )
 
@@ -591,6 +632,7 @@ Return valid JSON only.
 def validate_plan(plan):
 
     if not isinstance(plan, dict):
+
         raise RuntimeError(
             "Invalid plan format."
         )
@@ -605,33 +647,40 @@ def validate_plan(plan):
     for field in required_fields:
 
         if not plan.get(field):
+
             raise RuntimeError(
                 f"Missing required plan field: {field}"
             )
 
     if not isinstance(plan["scenes"], list):
+
         raise RuntimeError(
             "Scenes must be a list."
         )
 
     if len(plan["scenes"]) != 7:
+
         raise RuntimeError(
-            f"Expected exactly 7 scenes, got {len(plan['scenes'])}."
+            f"Expected exactly 7 scenes, "
+            f"got {len(plan['scenes'])}."
         )
 
     for index, scene in enumerate(plan["scenes"]):
 
         if not isinstance(scene, dict):
+
             raise RuntimeError(
                 f"Invalid scene {index + 1}"
             )
 
         if not scene.get("visual_query"):
+
             raise RuntimeError(
                 f"Missing visual query in scene {index + 1}"
             )
 
         if not scene.get("caption"):
+
             raise RuntimeError(
                 f"Missing caption in scene {index + 1}"
             )
@@ -641,6 +690,7 @@ def validate_plan(plan):
     )
 
     if narration_words < 55 or narration_words > 100:
+
         raise RuntimeError(
             f"Invalid narration length: {narration_words} words"
         )
@@ -796,7 +846,7 @@ def main():
                     TARGET_SECONDS
                 )
 
-            except QuotaPause:
+            except (QuotaPause, GeminiTemporaryPause):
 
                 save_state({
                     "stage": "need_plan"
@@ -883,7 +933,7 @@ def main():
                     TARGET_SECONDS
                 )
 
-            except QuotaPause:
+            except (QuotaPause, GeminiTemporaryPause):
 
                 save_state({
                     "stage": "researched",
@@ -1043,10 +1093,21 @@ def main():
         print("\n" + "=" * 55)
         print("GEMINI QUOTA LIMIT REACHED")
         print("Progress saved.")
-        print("AUTOFACT AI PAUSED.")
         print("A later scheduled run can retry.")
         print(str(exc))
         print("=" * 55)
+
+        raise
+
+    except GeminiTemporaryPause as exc:
+
+        print("\n" + "=" * 55)
+        print("GEMINI TEMPORARILY UNAVAILABLE")
+        print("Progress saved for the next scheduled retry.")
+        print(str(exc))
+        print("=" * 55)
+
+        raise
 
 
 # ============================================================
