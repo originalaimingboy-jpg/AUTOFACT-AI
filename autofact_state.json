@@ -1,3 +1,56 @@
 {
-  "stage": "need_plan"
+  "stage": "researched",
+  "plan": {
+    "topic": "Blood Falls of Antarctica",
+    "topic_slug": "blood-falls-antarctica",
+    "wikipedia_search": "Blood Falls",
+    "title": "Antarctica Ka Khuni Jharna? 🩸 Blood Falls Mystery",
+    "description_intro": "Antarctica ke barfile maidan me ek aisi jagah hai jaha se laal rang ka paani behta hai. Scientists ne is ajeeb phenomenon ke peeche ka asali raaz dhoondh nikala hai.",
+    "hashtags": [
+      "#Shorts",
+      "#ScienceFacts",
+      "#Antarctica",
+      "#EarthMysteries"
+    ],
+    "tags": [
+      "blood falls",
+      "antarctica mystery",
+      "taylor glacier",
+      "science facts in hindi",
+      "geography facts"
+    ],
+    "narration": "Antarctica ki safed barf ke beech ek aisa jharna hai jo bilkul khoon ki tarah laal behta hai. Pehli baar dekhne par researchers ko laga ki ye koi laal algae hai. Lekin sachai aur bhi hairan kar dene wali nikli. Barf ke do million saal purane glacier ke neeche ek aisi jheel chhipi hai, jisme na dhoop hai aur na oxygen. Is paani me iron itna zyada hai ki hawa ke contact me aate hi ye rust hokar laal ho jata hai.",
+    "style": "Documentary realism with dramatic contrast, slow cinematic zooms, and crisp visual storytelling",
+    "scenes": [
+      {
+        "visual_query": "Taylor Glacier Blood Falls Antarctica aerial wide shot red waterfall",
+        "caption": "Antarctica Ka Blood Falls"
+      },
+      {
+        "visual_query": "Blood Falls red liquid flowing over white ice close up",
+        "caption": "Khoon Jaisa Laal Paani"
+      },
+      {
+        "visual_query": "Geologist Griffith Taylor Antarctica expedition historic photograph",
+        "caption": "1911 Ki Discovery"
+      },
+      {
+        "visual_query": "Subglacial lake under Taylor glacier Antarctica scientific diagram cross section",
+        "caption": "Glacier Ke Neeche Jheel"
+      },
+      {
+        "visual_query": "Subglacial extremophile microbes microscope science laboratory view",
+        "caption": "Bina Oxygen Aur Dhoop"
+      },
+      {
+        "visual_query": "Iron rich water oxidizing turning reddish brown chemistry experiment",
+        "caption": "Iron Oxidation Reaction"
+      },
+      {
+        "visual_query": "Dramatic contrast Taylor Glacier white ice and crimson Blood Falls Antarctica vertical",
+        "caption": "Kudrat Ka Anokha Karishma"
+      }
+    ]
+  },
+  "wiki": "Article: Blood Falls\nURL: https://en.wikipedia.org/wiki/Blood_Falls\nSummary: Blood Falls is an outflow of an iron(III) oxide–tainted plume of saltwater, flowing from the tongue of Taylor Glacier onto the ice-covered surface of West Lake Bonney in the Taylor Valley of the McMurdo Dry Valleys in Victoria Land, East Antarctica."
 }
