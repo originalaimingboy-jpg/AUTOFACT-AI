@@ -3,8 +3,12 @@ name: AUTOFACT AI - Weekly Shorts
 
 on:
   schedule:
+    # Weekly Short: every Sunday
     - cron: "30 3 * * 0"
+
+    # Retry/resume check: every 3 hours
     - cron: "0 */3 * * *"
+
   workflow_dispatch:
 
 permissions:
@@ -20,46 +24,62 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      # 1. Download repository
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           persist-credentials: true
 
+      # 2. Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
+      # 3. Install FFmpeg and fonts
       - name: Install system tools
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
 
+      # 4. Install Python dependencies
       - name: Install Python packages
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # 5. Generate or resume Short
       - name: Generate or resume Short
         env:
+          # Gemini AI
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_BACKUP_API_KEYS: ${{ secrets.GEMINI_BACKUP_API_KEYS }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
 
+          # Pixabay media API
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+
+          # YouTube upload
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
 
+          # Video settings
           VIDEO_LANGUAGE: Hinglish
           VIDEO_SECONDS: "35"
           VOICE_NAME: hi-IN-MadhurNeural
           OUTPUT_DIR: work
 
+          # Retry mode for 3-hour scheduled runs only
           AUTOFACT_RETRY_ONLY: ${{ github.event.schedule == '0 */3 * * *' }}
+
+          # Show Python logs immediately
+          PYTHONUNBUFFERED: "1"
 
         run: python main.py
 
+      # 6. Save topic history and progress
       - name: Save progress and topic history
         if: always()
         run: |
@@ -77,8 +97,11 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit -m "chore: save AUTOFACT progress"
             git push
+          else
+            echo "No progress changes to save."
           fi
 
+      # 7. Keep generated videos as backup
       - name: Upload generated MP4 as backup
         if: always()
         uses: actions/upload-artifact@v4
