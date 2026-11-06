@@ -1,3 +1,4 @@
+
 name: AUTOFACT AI - Weekly Shorts
 
 on:
@@ -43,16 +44,20 @@ jobs:
       - name: Generate or resume Short
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_BACKUP_API_KEYS: ${{ secrets.GEMINI_BACKUP_API_KEYS }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
-          GEMINI_FALLBACK_MODEL: ${{ vars.GEMINI_FALLBACK_MODEL }}
+
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+
           VIDEO_LANGUAGE: Hinglish
           VIDEO_SECONDS: "35"
           VOICE_NAME: hi-IN-MadhurNeural
           OUTPUT_DIR: work
+
           AUTOFACT_RETRY_ONLY: ${{ github.event.schedule == '0 */3 * * *' }}
+
         run: python main.py
 
       - name: Save progress and topic history
