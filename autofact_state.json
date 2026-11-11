@@ -1,0 +1,57 @@
+{
+  "stage": "fact_checked",
+  "plan": {
+    "topic": "Kawah Ijen Blue Fire",
+    "topic_slug": "kawah-ijen-blue-fire",
+    "wikipedia_search": "Kawah Ijen",
+    "title": "Yeh Volcano Neeli Aag Kyun Ugalta Hai? 🌋",
+    "description_intro": "Indonesia ke is anokhe volcano complex mein blue fire aur acidic crater lake dikhti hai. Jaaniye Kawah Ijen ke is anokhe phenomenon ke baare mein.",
+    "hashtags": [
+      "#Shorts",
+      "#KawahIjen",
+      "#ScienceFacts",
+      "#MysteriesOfEarth"
+    ],
+    "tags": [
+      "kawah ijen",
+      "blue fire volcano",
+      "science facts",
+      "nature mystery",
+      "indonesia volcano",
+      "earth facts"
+    ],
+    "narration": "Indonesia ke East Java mein maujood Ijen volcano complex duniya bhar mein behad mashhoor hai. Yeh jagah apne electric blue fire, acidic crater lake aur sulfur mining ke liye jaani jaati hai. Raat ke andhere mein yahan sulfur ki vajah se neeli aag chamakti dikhai deti hai, jo behad anokhi lagti hai. Iske alawa, yahan ka vishal acidic crater lake aur sulfur mining is jagah ko aur bhi hairatangez banate hain. Nature ka yeh roop sach mein lajawab hai!",
+    "style": "High-contrast documentary style with dark atmospheric tones and vibrant neon-blue highlights",
+    "scenes": [
+      {
+        "visual_query": "Ijen volcano complex East Java landscape dramatic daylight",
+        "caption": "Ijen Volcano Complex"
+      },
+      {
+        "visual_query": "Ijen volcano blue fire glowing brightly in dark night",
+        "caption": "Anokhi Blue Fire"
+      },
+      {
+        "visual_query": "Sulfur mining activity with yellow sulfur rocks at Ijen crater",
+        "caption": "Sulfur Mining"
+      },
+      {
+        "visual_query": "Workers carrying sulfur baskets at Ijen volcano crater",
+        "caption": "Labour-Intensive Work"
+      },
+      {
+        "visual_query": "Close up burning blue flames sulfur night Ijen",
+        "caption": "Neeli Laptein"
+      },
+      {
+        "visual_query": "Turquoise acidic crater lake Kawah Ijen aerial view",
+        "caption": "Acidic Crater Lake"
+      },
+      {
+        "visual_query": "Panoramic wide night shot of Ijen crater with blue flames",
+        "caption": "Nature Ka Ajooba"
+      }
+    ]
+  },
+  "wiki": "Article: Ijen\nURL: https://en.wikipedia.org/wiki/Ijen\nSummary: The Ijen volcano complex is a group of composite volcanoes located on the border between Banyuwangi Regency and Bondowoso Regency of East Java, Indonesia. It is known for its blue fire, acidic crater lake, and labour-intensive sulfur mining."
+}
